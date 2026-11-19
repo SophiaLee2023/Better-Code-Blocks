@@ -58,7 +58,7 @@ for (const f of ['themes.js', 'highlighter.js', 'code.js']) {
   vm.runInContext(fs.readFileSync(path.join(root, 'src', f), 'utf8'), ctx, { filename: f });
 }
 
-const res = ctx.highlightSelection({ lang: 'auto', theme: 'onedarkpro', font: 'Roboto Mono', fontSize: 10, background: true, fontStyles: true });
+const res = ctx.highlightSelection({ lang: 'auto', theme: 'one', mode: 'dark', font: 'Roboto Mono', fontSize: 10, background: true, fontStyles: true });
 console.log('result', res);
 assert.strictEqual(res.lang, 'bash');
 
@@ -69,7 +69,7 @@ const colorAt = (p, word) => {
 // untouched text before the selection
 assert.deepStrictEqual(paras[0].chars[0].a, {});
 // ros2 -> deep red bold, topic -> cyan regular
-assert.strictEqual(colorAt(paras[0], 'ros2').FOREGROUND_COLOR, '#be5046');
+assert.strictEqual(colorAt(paras[0], 'ros2').FOREGROUND_COLOR, '#e2584a');
 assert.strictEqual(colorAt(paras[0], 'ros2').BOLD, true);
 assert.strictEqual(colorAt(paras[0], 'topic').FOREGROUND_COLOR, '#56b6c2');
 assert.strictEqual(colorAt(paras[0], 'topic').BOLD, false);
@@ -88,4 +88,20 @@ assert.strictEqual(paras[3].chars[paras[3].chars.length - 1].a.ITALIC, true);
 
 ctx.clearSelection();
 assert.strictEqual(colorAt(paras[1], 'docker').FOREGROUND_COLOR, null);
+
+// light mode, no theme background: light palette colors and the page background is left alone
+ctx.highlightSelection({ lang: 'bash', theme: 'one', mode: 'light', font: 'keep', fontSize: 0, background: false, fontStyles: true });
+const oneLight = vm.runInContext('resolveTheme("one", "light")', ctx);
+assert.strictEqual(colorAt(paras[0], 'ros2').FOREGROUND_COLOR, oneLight.styles.ros.c);
+assert.strictEqual(colorAt(paras[0], 'ros2').BACKGROUND_COLOR, null);
+assert.strictEqual(colorAt(paras[1], 'compose').FOREGROUND_COLOR, oneLight.styles.dockerSub.c);
+assert.strictEqual(JSON.parse(props['codeHighlighter.settings']).mode, 'light');
+
+// settings saved with an old single-palette theme id still load
+props['codeHighlighter.settings'] = JSON.stringify({ theme: 'githublight' });
+const loaded = ctx.loadSettings_();
+assert.strictEqual(loaded.theme, 'github');
+assert.strictEqual(loaded.mode, 'light');
+props['codeHighlighter.settings'] = JSON.stringify({ theme: 'onedarkpro' });
+assert.strictEqual(ctx.loadSettings_().mode, 'dark');
 console.log('apply test passed');

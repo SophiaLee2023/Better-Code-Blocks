@@ -123,7 +123,8 @@ var Highlighter = (function () {
     if (prevWord && spec.typeAfter && spec.typeAfter.has(prevWord)) return 'type';
     if (spec.builtins && spec.builtins.has(word)) return 'builtin';
     if (next === '(' || (spec.macroBang && next === '!')) return 'function';
-    if (spec.selfWords && spec.selfWords.has(word)) return 'variable';
+    // `self` / `cls` look like `this` in the C-like languages, so they share its keyword color
+    if (spec.selfWords && spec.selfWords.has(word)) return 'keyword';
     if (!spec.noCaps) {
       if (/^[A-Z][A-Z0-9_]+$/.test(word)) return 'constant';
       if (/^[A-Z]\w*[a-z]\w*$/.test(word)) return 'type';
@@ -366,7 +367,9 @@ var Highlighter = (function () {
       [/#\[\[[\s\S]*?(?:\]\]|$)/y, 'comment'], R.hash,
       [/"(?:[^"\\]|\\[\s\S])*"?/y, function (m) { return interpParts(m[0], /\$(?:ENV|CACHE)?\{[^}\n]*\}/g); }],
       [/\$(?:ENV|CACHE)?\{[^}\n]*\}/y, 'variable'],
-      [/\$<[^>\n]*>/y, 'meta']
+      [/\$<[^>\n]*>/y, 'meta'],
+      // unquoted paths and source files: src/talker.cpp, launch/sim.launch.py, msg/Num.msg
+      [/[A-Za-z_][\w.+-]*(?:\/[\w.+*-]+)+|[A-Za-z_][\w-]*(?:\.[\w-]+)*\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|py|msg|srv|action|xml|ya?ml|txt|cmake|json|in)\b/y, 'string']
     ],
     classify: function (w, lw, info) {
       if (info.next === '(') {
@@ -398,12 +401,32 @@ var Highlighter = (function () {
 
   /** Classifies an argument word; returns a type or null. */
   function argumentWord(st, w) {
+    if (st.cmd === 'ros' && st.arg === 1) st.rosVerb = w;
     if (st.cmd === 'ros' && st.arg <= 2 && ROS_SUB.has(w)) return 'rosSub';
     if (st.cmd === 'docker' && st.arg <= 2 && DOCKER_SUB.has(w)) return 'dockerSub';
     if (ROS_ARG_WORDS.has(w) || ROS_PATH_RE.test(w)) return 'rosSub';
     if (ROS_MSG_RE.test(w)) return 'type';
     if (st.cmd === 'docker' && /^[\w.\/-]+:[\w.-]+$/.test(w) && !/^\d/.test(w)) return 'type';
+    // package name in `ros2 run <pkg> ...` / `ros2 launch <pkg> ...`
+    if (st.cmd === 'ros' && st.arg === 2 && (st.rosVerb === 'run' || st.rosVerb === 'launch') &&
+        /^[A-Za-z_][\w-]*$/.test(w)) return 'type';
+    if (PATH_ARG_RE.test(w)) return 'string';
     return null;
+  }
+
+  /** Unquoted file paths, URLs and file names (`src/main.cpp`, `~/.bashrc`, `setup.bash`). */
+  var PATH_ARG_RE = /\/|^~|^[\w-]+\.[A-Za-z][\w.]*$/;
+
+  /** Pushes a shell argument, splitting ROS launch arguments `name:=value`. */
+  function pushArgument(ctx, st, i, w) {
+    var la = /^([A-Za-z_][\w.]*)(:=)(.*)$/.exec(w);
+    if (!la) { push(ctx, i, i + w.length, argumentWord(st, w)); return; }
+    var p = i + la[1].length;
+    push(ctx, i, p, 'property');
+    push(ctx, p, p + 2, 'operator');
+    var v = la[3];
+    push(ctx, p + 2, p + 2 + v.length,
+      /^(true|false|True|False)$/.test(v) ? 'constant' : /^-?\d+(\.\d+)?$/.test(v) ? 'number' : 'string');
   }
 
   function tokenizeShell(code, base, out) {
@@ -514,7 +537,7 @@ var Highlighter = (function () {
           continue;
         }
         if (w === 'in' && (st.cmd === 'for' || st.cmd === 'case' || st.cmd === 'select')) { push(ctx, i, end, 'keyword'); continue; }
-        push(ctx, i, end, argumentWord(st, w));
+        pushArgument(ctx, st, i, w);
         continue;
       }
       ctx.i++;

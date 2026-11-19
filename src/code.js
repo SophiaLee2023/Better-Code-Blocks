@@ -7,7 +7,7 @@ var SETTINGS_KEY = 'codeHighlighter.settings';
 var FONTS = ['Roboto Mono', 'Source Code Pro', 'JetBrains Mono', 'Fira Code', 'IBM Plex Mono', 'Inconsolata',
   'Ubuntu Mono', 'Space Mono', 'Consolas', 'Courier New'];
 var DEFAULT_SETTINGS = {
-  lang: 'auto', theme: 'onedarkpro', font: 'Roboto Mono', fontSize: 10, background: true, fontStyles: true
+  lang: 'auto', theme: 'one', mode: 'light', font: 'Roboto Mono', fontSize: 10, background: true, fontStyles: true
 };
 
 function onOpen(e) {
@@ -30,11 +30,15 @@ function showSidebar() {
 function getConfig() {
   return {
     themes: Object.keys(THEMES).map(function (id) {
-      var t = resolveTheme(id);
-      return {
-        id: id, name: t.name, dark: t.dark, bg: t.bg, fg: t.fg,
-        swatch: ['keyword', 'string', 'function', 'type', 'ros', 'docker'].map(function (k) { return t.styles[k].c; })
-      };
+      var out = { id: id };
+      ['light', 'dark'].forEach(function (mode) {
+        var t = resolveTheme(id, mode);
+        out[mode] = {
+          name: t.name, bg: t.bg, fg: t.fg,
+          swatch: ['keyword', 'string', 'function', 'type', 'ros', 'docker'].map(function (k) { return t.styles[k].c; })
+        };
+      });
+      return out;
     }),
     languages: Highlighter.LANGUAGES,
     fonts: FONTS,
@@ -47,7 +51,7 @@ function highlightSelection(opts) {
   saveSettings_(opts);
   var sel = readSelection_();
   var lang = opts.lang === 'auto' ? Highlighter.detect(sel.text) : opts.lang;
-  var theme = resolveTheme(opts.theme);
+  var theme = resolveTheme(opts.theme, opts.mode);
   var tokens = Highlighter.tokenize(sel.text, lang);
   var runs = buildRuns_(tokens, sel.text, theme, opts);
   applyBase_(sel.segments, theme, opts);
@@ -60,7 +64,7 @@ function previewSelection(opts) {
   var sel = readSelection_();
   var text = sel.text.slice(0, 5000);
   var lang = opts.lang === 'auto' ? Highlighter.detect(text) : opts.lang;
-  var theme = resolveTheme(opts.theme);
+  var theme = resolveTheme(opts.theme, opts.mode);
   return {
     lang: lang, langName: Highlighter.langName(lang),
     html: renderHtml_(text, Highlighter.tokenize(text, lang), theme, opts),
@@ -103,7 +107,13 @@ function normalizeOpts_(o) {
   s.fontSize = Math.max(0, Math.min(72, Number(s.fontSize) || 0));
   s.background = !!s.background;
   s.fontStyles = !!s.fontStyles;
+  // settings saved before themes had modes name a single palette, e.g. 'onedarkpro'
+  if (!THEMES[s.theme] && LEGACY_THEMES[s.theme]) {
+    if (!o || !o.mode) s.mode = LEGACY_THEMES[s.theme][1];
+    s.theme = LEGACY_THEMES[s.theme][0];
+  }
   if (!THEMES[s.theme]) s.theme = DEFAULT_THEME;
+  if (s.mode !== 'light' && s.mode !== 'dark') s.mode = DEFAULT_MODE;
   return s;
 }
 

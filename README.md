@@ -10,8 +10,12 @@ or other wrappers.
 
 ## Features
 
-- **Themes:** One Dark Pro (default), One Light, VS Code Dark+ / Light+, Monokai, Dracula,
-  GitHub Dark / Light, Solarized Dark / Light, Nord, Gruvbox Dark, Tokyo Night, Catppuccin Mocha
+- **Themes, each with a Light and a Dark mode:** One (Dark Pro / Light, default), VS Code
+  (Dark+ / Light+), GitHub, Solarized, Monokai, Dracula (Dracula / Alucard), Nord, Gruvbox,
+  Tokyo Night, Catppuccin (Mocha / Latte)
+- **Light mode works on gray pages.** Every light-mode color has at least 4.5:1 contrast against
+  light gray (`#e0e0e0`), so code stays readable on white or gray backgrounds even with the theme
+  background turned off.
 - **Languages:** Python, Java, C, C++, C#, JavaScript, TypeScript, HTML, CSS/SCSS, Bash/Shell,
   PowerShell, Dockerfile, YAML, XML, JSON, CMake, SQL, Go, Rust, plus auto-detection
 - **ROS 2 awareness.** These get their own `ros` color, bold for the tool and regular weight for
@@ -120,7 +124,8 @@ and reload the doc.
 ## Usage
 
 1. Select the code in the doc.
-2. In the sidebar, pick a language (or **Auto-detect**) and a theme.
+2. In the sidebar, pick a language (or **Auto-detect**), a theme and a mode. Use **Light** for
+   white or light gray pages, and **Dark** together with **Theme background color on text**.
 3. Click **Highlight selection**.
 
 **Preview** renders the selection in the sidebar without changing the doc. **Clear** removes the
@@ -143,18 +148,22 @@ src/                     Apps Script project (the files you paste in)
 test/
   run_samples.js         tokenizes every sample and writes test/out/preview.html
   apply_selection.js     runs highlightSelection() against a mocked DocumentApp
+  check_themes.js        contrast and "colors look alike" checks for every palette
+  color_variety.js       fails if too many sample lines end up mostly one color
   samples/               one sample file per language
 ```
 
 The tokenizer has no dependencies and runs in Node:
 
 ```bash
-npm test                               # both test scripts
-node test/run_samples.js --all         # preview every theme in test/out/preview.html
-node test/run_samples.js --dump bash   # print the tokens for one sample
+npm test                                   # all test scripts
+node test/run_samples.js --all             # preview every theme in test/out/preview.html
+node test/run_samples.js --dump bash       # print the tokens for one sample
+node test/color_variety.js nord light      # list the lines that are mostly one color
 ```
 
-To add a theme, add an entry to `THEMES` in `src/themes.js`. To add a language, add a spec to
+To add a theme, add an entry with a `dark` and a `light` palette to `THEMES` in `src/themes.js`,
+then run `node test/check_themes.js`. To add a language, add a spec to
 `SPECS` (or a custom tokenizer) and register it in `LANGS` in `src/highlighter.js`. Name sample
 files `<language_id>.<ext>`.
 

@@ -5,7 +5,7 @@
   "type": "commonjs",
   "description": "Google Docs add-on that syntax-highlights selected text in place.",
   "scripts": {
-    "test": "node test/run_samples.js && node test/apply_selection.js",
+    "test": "node test/run_samples.js && node test/apply_selection.js && node test/check_themes.js && node test/color_variety.js",
     "preview_all": "node test/run_samples.js --all",
     "push": "clasp push"
   }

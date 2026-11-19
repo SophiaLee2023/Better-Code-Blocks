@@ -3,7 +3,8 @@
  * Local test harness: loads the Apps Script sources into a Node VM, runs the tokenizer on the
  * samples in test/samples, and writes test/out/preview.html showing every language in a theme.
  *
- *   node test/run_samples.js [themeId]        # default: onedarkpro
+ *   node test/run_samples.js [themeId [mode]] # default: one, both light and dark
+ *   node test/run_samples.js --all            # every theme in both modes
  *   node test/run_samples.js --dump bash      # print tokens for one sample
  */
 const fs = require('fs');
@@ -54,14 +55,19 @@ const opts = { fontStyles: true };
 let html = '<!doctype html><meta charset="utf-8"><title>Highlighter preview</title>' +
   '<style>body{font-family:sans-serif;background:#ddd;margin:16px}pre{padding:12px;border-radius:6px;' +
   'font:13px/1.45 "Roboto Mono",Consolas,monospace;overflow:auto}h2{margin:24px 0 6px}</style>';
-const themesToShow = args[0] === '--all' ? themeIds : [args[0] || 'onedarkpro'];
+// light palettes are shown without their background, on the page's light gray, the way they look
+// in a doc with "Theme background color on text" turned off
+const modes = args[1] ? [args[1]] : ['light', 'dark'];
+const themesToShow = args[0] === '--all' ? themeIds : [args[0] || 'one'];
 for (const id of themesToShow) {
-  const theme = vm.runInContext('resolveTheme(' + JSON.stringify(id) + ')', ctx);
-  html += '<h1>' + theme.name + '</h1>';
-  for (const s of samples) {
-    const body = ctx.renderHtml_(s.code, Highlighter.tokenize(s.code, s.lang), theme, opts);
-    html += '<h2>' + Highlighter.langName(s.lang) + '</h2><pre style="background:' + theme.bg + ';color:' +
-      theme.fg + '">' + body + '</pre>';
+  for (const mode of modes) {
+    const theme = vm.runInContext('resolveTheme(' + JSON.stringify(id) + ',' + JSON.stringify(mode) + ')', ctx);
+    html += '<h1>' + theme.name + '</h1>';
+    for (const s of samples) {
+      const body = ctx.renderHtml_(s.code, Highlighter.tokenize(s.code, s.lang), theme, opts);
+      html += '<h2>' + Highlighter.langName(s.lang) + '</h2><pre style="' +
+        (mode === 'dark' ? 'background:' + theme.bg + ';' : 'border:1px solid #bbb;') + 'color:' + theme.fg + '">' + body + '</pre>';
+    }
   }
 }
 fs.writeFileSync(path.join(outDir, 'preview.html'), html);
