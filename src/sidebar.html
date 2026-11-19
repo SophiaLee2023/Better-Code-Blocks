@@ -54,6 +54,7 @@
     </div>
   </div>
 
+  <div class="check"><input type="checkbox" id="fullWidth"><label for="fullWidth">Full-width code block (whole lines, margin to margin)</label></div>
   <div class="check"><input type="checkbox" id="background"><label for="background">Theme background color on text</label></div>
   <div class="check"><input type="checkbox" id="fontStyles"><label for="fontStyles">Bold / italic from theme</label></div>
 
@@ -91,6 +92,7 @@
     var s = c.settings;
     $('lang').value = s.lang; $('theme').value = s.theme; $('mode').value = s.mode; $('font').value = s.font;
     $('fontSize').value = s.fontSize; $('background').checked = s.background; $('fontStyles').checked = s.fontStyles;
+    $('fullWidth').checked = s.fullWidth;
     renderTheme();
   }
 
@@ -105,14 +107,17 @@
     t.swatch.forEach(function (col) { html += '<span style="background:' + col + '"></span>'; });
     $('swatch').innerHTML = html;
     $('swatch').title = 'keyword · string · function · type · ROS 2 · Docker';
-    $('modeWarn').style.display = mode === 'dark' && !$('background').checked ? 'block' : 'none';
+    // the full-width block already uses the theme background
+    $('background').disabled = $('fullWidth').checked;
+    var hasBg = $('fullWidth').checked || $('background').checked;
+    $('modeWarn').style.display = mode === 'dark' && !hasBg ? 'block' : 'none';
   }
 
   function opts() {
     return {
       lang: $('lang').value, theme: $('theme').value, mode: $('mode').value, font: $('font').value,
       fontSize: Number($('fontSize').value) || 0,
-      background: $('background').checked, fontStyles: $('fontStyles').checked
+      background: $('background').checked, fontStyles: $('fontStyles').checked, fullWidth: $('fullWidth').checked
     };
   }
 
@@ -127,11 +132,12 @@
       .withFailureHandler(function (e) { busy(false); status(e.message || String(e), true); })[fn](opts());
   }
 
-  ['theme', 'mode', 'background'].forEach(function (id) { $(id).addEventListener('change', renderTheme); });
+  ['theme', 'mode', 'background', 'fullWidth'].forEach(function (id) { $(id).addEventListener('change', renderTheme); });
 
   $('btnApply').addEventListener('click', function () {
     call('highlightSelection', function (r) {
-      status('Highlighted ' + r.chars + ' characters as ' + r.langName + '.');
+      status('Highlighted ' + r.chars + ' characters as ' + r.langName +
+        (r.lines ? ' in a ' + r.lines + '-line block.' : '.'));
     }, 'Highlighting…');
   });
 

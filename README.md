@@ -1,8 +1,8 @@
 # Code Highlighter for Google Docs
 
-A Google Docs add-on that syntax-highlights the **selected text in place**. It only changes text
-formatting (font, font size, text color, bold/italic, and text background) and never inserts tables
-or other wrappers.
+A Google Docs add-on that syntax-highlights the **selected text in place**. It only changes
+formatting (font, font size, text color, bold/italic, text background, and optionally paragraph
+shading) and never inserts tables or other wrappers.
 
 > **Note:** This is a Google Apps Script add-on, not a Chrome extension. Loading this folder in
 > `chrome://extensions` fails with "Manifest file is missing or unreadable". Install it in Google
@@ -16,6 +16,8 @@ or other wrappers.
 - **Light mode works on gray pages.** Every light-mode color has at least 4.5:1 contrast against
   light gray (`#e0e0e0`), so code stays readable on white or gray backgrounds even with the theme
   background turned off.
+- **Full-width code blocks.** Optionally shades whole lines in the theme background from the left
+  margin to the right, so the code looks like a block instead of highlighted text.
 - **Languages:** Python, Java, C, C++, C#, JavaScript, TypeScript, HTML, CSS/SCSS, Bash/Shell,
   PowerShell, Dockerfile, YAML, XML, JSON, CMake, SQL, Go, Rust, plus auto-detection
 - **ROS 2 awareness.** These get their own `ros` color, bold for the tool and regular weight for
@@ -80,14 +82,25 @@ The name must be exactly `sidebar`, because `code.js` loads the sidebar by that 
   "timeZone": "America/New_York",
   "exceptionLogging": "STACKDRIVER",
   "runtimeVersion": "V8",
+  "dependencies": {
+    "enabledAdvancedServices": [
+      { "userSymbol": "Docs", "version": "v1", "serviceId": "docs" }
+    ]
+  },
   "oauthScopes": [
-    "https://www.googleapis.com/auth/documents.currentonly",
+    "https://www.googleapis.com/auth/documents",
     "https://www.googleapis.com/auth/script.container.ui"
   ]
 }
 ```
 
-These scopes limit the add-on to the document it's open in and let it show a sidebar.
+The `dependencies` entry turns on the Google Docs API service, which the full-width code block
+needs: the regular Apps Script document API can't set paragraph shading. The Docs API requires the
+`documents` scope, so the authorization screen asks for access to all your Google Docs. The script
+still only edits the document you run it in. The second scope lets it show a sidebar.
+
+After you save the manifest, **Docs** appears under **Services** in the left bar. If it doesn't,
+click **+** next to **Services**, pick **Google Docs API**, and click **Add**.
 
 When you're done, the file list should look like this:
 
@@ -119,17 +132,24 @@ document.
 ### Updating
 
 When the files in `src/` change, paste the new contents over the matching Apps Script file, save,
-and reload the doc.
+and reload the doc. If `appsscript.json` changed its scopes, Google asks you to authorize again the
+next time you run it.
 
 ## Usage
 
 1. Select the code in the doc.
 2. In the sidebar, pick a language (or **Auto-detect**), a theme and a mode. Use **Light** for
-   white or light gray pages, and **Dark** together with **Theme background color on text**.
+   white or light gray pages, and **Dark** together with **Theme background color on text** or
+   **Full-width code block**.
 3. Click **Highlight selection**.
 
+With **Full-width code block** checked, every line the selection touches is highlighted in full,
+even if you only selected part of it. Each line gets paragraph shading in the theme background
+from the left margin to the right, plus a border of the same color as padding and no spacing
+between lines, so consecutive lines join into one block.
+
 **Preview** renders the selection in the sidebar without changing the doc. **Clear** removes the
-formatting again.
+formatting again, including the block shading on the selected lines.
 
 The sidebar remembers your last settings. The **Extensions → Code Highlighter** menu also has:
 

@@ -1,14 +1,20 @@
 /**
  * Code Highlighter — Google Docs editor add-on.
  * Highlights the selected text in place (font, text color, bold/italic, background). No tables.
+ *
+ * With "Full-width code block" on, every selected line is highlighted in full and its paragraph gets
+ * the theme background as paragraph shading, which spans margin to margin. DocumentApp can't set
+ * paragraph shading, so that part goes through the Docs API advanced service (`Docs`).
  */
 
 var SETTINGS_KEY = 'codeHighlighter.settings';
 var FONTS = ['Roboto Mono', 'Source Code Pro', 'JetBrains Mono', 'Fira Code', 'IBM Plex Mono', 'Inconsolata',
   'Ubuntu Mono', 'Space Mono', 'Consolas', 'Courier New'];
 var DEFAULT_SETTINGS = {
-  lang: 'auto', theme: 'one', mode: 'light', font: 'Roboto Mono', fontSize: 10, background: true, fontStyles: true
+  lang: 'auto', theme: 'one', mode: 'light', font: 'Roboto Mono', fontSize: 10, background: true, fontStyles: true,
+  fullWidth: false
 };
+var BLOCK_FIELDS = 'shading,borderTop,borderBottom,borderLeft,borderRight,borderBetween,spaceAbove,spaceBelow';
 
 function onOpen(e) {
   DocumentApp.getUi().createAddonMenu()
@@ -49,19 +55,21 @@ function getConfig() {
 function highlightSelection(opts) {
   opts = normalizeOpts_(opts);
   saveSettings_(opts);
-  var sel = readSelection_();
+  var sel = readSelection_(opts.fullWidth);
   var lang = opts.lang === 'auto' ? Highlighter.detect(sel.text) : opts.lang;
   var theme = resolveTheme(opts.theme, opts.mode);
   var tokens = Highlighter.tokenize(sel.text, lang);
   var runs = buildRuns_(tokens, sel.text, theme, opts);
   applyBase_(sel.segments, theme, opts);
   applyRuns_(sel.segments, runs);
-  return { lang: lang, langName: Highlighter.langName(lang), runs: runs.length, chars: sel.text.length };
+  var blocks = 0;
+  if (opts.fullWidth) blocks = styleParagraphs_(sel.paragraphs, theme.bg);
+  return { lang: lang, langName: Highlighter.langName(lang), runs: runs.length, chars: sel.text.length, lines: blocks };
 }
 
 function previewSelection(opts) {
   opts = normalizeOpts_(opts);
-  var sel = readSelection_();
+  var sel = readSelection_(opts.fullWidth);
   var text = sel.text.slice(0, 5000);
   var lang = opts.lang === 'auto' ? Highlighter.detect(text) : opts.lang;
   var theme = resolveTheme(opts.theme, opts.mode);
@@ -72,8 +80,9 @@ function previewSelection(opts) {
   };
 }
 
-function clearSelection() {
-  var sel = readSelection_();
+function clearSelection(opts) {
+  opts = normalizeOpts_(opts || loadSettings_());
+  var sel = readSelection_(opts.fullWidth);
   var A = DocumentApp.Attribute;
   sel.segments.forEach(function (seg) {
     if (!seg.len) return;
@@ -87,7 +96,8 @@ function clearSelection() {
     seg.text.setFontFamily(s, e, null);
     seg.text.setFontSize(s, e, null);
   });
-  return { chars: sel.text.length };
+  var blocks = styleParagraphs_(sel.paragraphs, null);
+  return { chars: sel.text.length, lines: blocks };
 }
 
 // ------------------------------------------------------------------ menu shortcuts
@@ -107,6 +117,7 @@ function normalizeOpts_(o) {
   s.fontSize = Math.max(0, Math.min(72, Number(s.fontSize) || 0));
   s.background = !!s.background;
   s.fontStyles = !!s.fontStyles;
+  s.fullWidth = !!s.fullWidth;
   // settings saved before themes had modes name a single palette, e.g. 'onedarkpro'
   if (!THEMES[s.theme] && LEGACY_THEMES[s.theme]) {
     if (!o || !o.mode) s.mode = LEGACY_THEMES[s.theme][1];
@@ -129,18 +140,27 @@ function saveSettings_(opts) {
 /**
  * Reads the current selection as one string plus the document segments it came from.
  * Each segment: {text: Text, start: offset in that element, off: offset in the joined string, len}.
+ * With wholeLines, every paragraph the selection touches is read in full.
+ * Also returns the touched paragraphs (Paragraph / ListItem elements), each listed once.
  */
-function readSelection_() {
+function readSelection_(wholeLines) {
   var sel = DocumentApp.getActiveDocument().getSelection();
   if (!sel) throw new Error('Select the code you want to format first.');
-  var segments = [], parts = [], off = 0;
+  var segments = [], parts = [], paragraphs = [], off = 0;
   sel.getRangeElements().forEach(function (re) {
     var el = re.getElement();
+    var para = paragraphOf_(el);
+    var known = paragraphs.indexOf(para) >= 0;
+    if (para && !known) paragraphs.push(para);
+    if (wholeLines && para) {
+      if (known) return;
+      el = para;
+    }
     if (typeof el.editAsText !== 'function') return; // images, rules, etc.
     var t = el.editAsText();
     var full = t.getText();
     var s = 0, e = full.length - 1;
-    if (re.isPartial()) { s = re.getStartOffset(); e = re.getEndOffsetInclusive(); }
+    if (re.isPartial() && !(wholeLines && para)) { s = re.getStartOffset(); e = re.getEndOffsetInclusive(); }
     var str = e >= s ? full.substring(s, e + 1) : '';
     if (parts.length) { parts.push('\n'); off += 1; }
     segments.push({ text: t, start: s, off: off, len: str.length });
@@ -149,7 +169,109 @@ function readSelection_() {
   });
   var text = parts.join('');
   if (!text.trim()) throw new Error('The selection contains no text.');
-  return { text: text, segments: segments };
+  return { text: text, segments: segments, paragraphs: paragraphs };
+}
+
+/** The Paragraph or ListItem containing el (or el itself), or null. */
+function paragraphOf_(el) {
+  var T = DocumentApp.ElementType;
+  while (el && el.getType() !== T.PARAGRAPH && el.getType() !== T.LIST_ITEM) el = el.getParent();
+  return el || null;
+}
+
+/**
+ * Child-index path from the document body down to el, e.g. [4] for the fifth body element or
+ * [2, 0, 1, 3] for the fourth paragraph in row 0, cell 1 of the table at body index 2.
+ * Null when el is not in the body (headers, footers, footnotes).
+ */
+function bodyPath_(el) {
+  var path = [];
+  for (var p = el.getParent(); p; el = p, p = p.getParent()) {
+    path.unshift(p.getChildIndex(el));
+    if (p.getType() === DocumentApp.ElementType.BODY_SECTION) return path;
+  }
+  return null;
+}
+
+/** Finds the Docs API paragraph element for a bodyPath_() path. */
+function apiParagraphAt_(content, path) {
+  var items = function (c) { return (c || []).filter(function (x) { return !x.sectionBreak; }); };
+  var node = items(content)[path[0]], i = 1;
+  while (node && node.table && i + 2 < path.length) {
+    var row = node.table.tableRows[path[i]];
+    var cell = row && row.tableCells[path[i + 1]];
+    node = cell && items(cell.content)[path[i + 2]];
+    i += 3;
+  }
+  return node && node.paragraph && i === path.length ? node : null;
+}
+
+/**
+ * Gives paragraphs margin-to-margin shading in color bg, with matching borders as padding and no
+ * gaps between lines, so consecutive lines merge into one block. bg = null removes that styling
+ * from paragraphs that have shading. Saves the document first, so no DocumentApp calls may follow.
+ * Returns the number of paragraphs changed.
+ */
+function styleParagraphs_(paragraphs, bg) {
+  var paths = paragraphs.map(bodyPath_).filter(function (p) { return p; });
+  if (!paths.length) return 0;
+  var docApp = DocumentApp.getActiveDocument();
+  var id = docApp.getId();
+  var tabId = null;
+  try { tabId = docApp.getActiveTab().getId(); } catch (e) { /* older runtime without tabs */ }
+  docApp.saveAndClose(); // the Docs API only sees changes once DocumentApp has saved them
+  var content = apiBodyContent_(id, tabId);
+  if (!content) return 0;
+  var style = {}, fields = BLOCK_FIELDS;
+  if (bg) {
+    var color = { color: { rgbColor: hexToRgb_(bg) } };
+    var border = function (pad) {
+      return { color: color, width: { magnitude: 1, unit: 'PT' }, padding: { magnitude: pad, unit: 'PT' }, dashStyle: 'SOLID' };
+    };
+    style = {
+      shading: { backgroundColor: color },
+      borderTop: border(6), borderBottom: border(6), borderLeft: border(6), borderRight: border(6),
+      borderBetween: border(0),
+      spaceAbove: { magnitude: 0, unit: 'PT' }, spaceBelow: { magnitude: 0, unit: 'PT' }
+    };
+  }
+  var requests = [];
+  paths.forEach(function (path) {
+    var node = apiParagraphAt_(content, path);
+    if (!node) return;
+    if (!bg) {
+      var sh = node.paragraph.paragraphStyle && node.paragraph.paragraphStyle.shading;
+      if (!(sh && sh.backgroundColor && sh.backgroundColor.color)) return;
+    }
+    var range = { startIndex: node.startIndex || 0, endIndex: node.endIndex };
+    if (tabId) range.tabId = tabId;
+    requests.push({ updateParagraphStyle: {
+      range: range,
+      paragraphStyle: style, fields: fields
+    } });
+  });
+  if (requests.length) Docs.Documents.batchUpdate({ requests: requests }, id);
+  return requests.length;
+}
+
+/** Body content of the given tab (or of the document when tabId is null), from the Docs API. */
+function apiBodyContent_(id, tabId) {
+  if (!tabId) return Docs.Documents.get(id).body.content;
+  var find = function (tabs) {
+    for (var k = 0; k < (tabs || []).length; k++) {
+      if (tabs[k].tabProperties.tabId === tabId) return tabs[k];
+      var child = find(tabs[k].childTabs);
+      if (child) return child;
+    }
+    return null;
+  };
+  var tab = find(Docs.Documents.get(id, { includeTabsContent: true }).tabs);
+  return tab && tab.documentTab ? tab.documentTab.body.content : null;
+}
+
+function hexToRgb_(hex) {
+  return { red: parseInt(hex.substr(1, 2), 16) / 255, green: parseInt(hex.substr(3, 2), 16) / 255,
+    blue: parseInt(hex.substr(5, 2), 16) / 255 };
 }
 
 function styleKey_(st) { return st.c + (st.b ? 'b' : '') + (st.i ? 'i' : ''); }
@@ -182,12 +304,14 @@ function applyBase_(segments, theme, opts) {
   attrs[A.ITALIC] = false;
   if (opts.font && opts.font !== 'keep') attrs[A.FONT_FAMILY] = opts.font;
   if (opts.fontSize > 0) attrs[A.FONT_SIZE] = opts.fontSize;
-  if (opts.background) attrs[A.BACKGROUND_COLOR] = theme.bg;
+  // a full-width block colors the whole paragraph, so the text itself needs no highlight
+  var textBg = opts.background && !opts.fullWidth;
+  if (textBg) attrs[A.BACKGROUND_COLOR] = theme.bg;
   segments.forEach(function (seg) {
     if (!seg.len) return;
     var s = seg.start, e = seg.start + seg.len - 1;
     seg.text.setAttributes(s, e, attrs);
-    if (!opts.background) seg.text.setBackgroundColor(s, e, null);
+    if (!textBg) seg.text.setBackgroundColor(s, e, null);
   });
 }
 
