@@ -60,10 +60,26 @@ function highlightSelection(opts) {
   var theme = resolveTheme(opts.theme, opts.mode);
   var tokens = Highlighter.tokenize(sel.text, lang);
   var runs = buildRuns_(tokens, sel.text, theme, opts);
-  applyBase_(sel.segments, theme, opts);
-  applyRuns_(sel.segments, runs);
   var blocks = 0;
-  if (opts.fullWidth) blocks = styleParagraphs_(sel.paragraphs, theme.bg);
+  var api = apiTargets_(sel);
+  if (api) {
+    // fast path: every change in one Docs API request
+    var requests = textRequests_(sel.segments, runs, theme, opts, api.tabId);
+    if (opts.fullWidth) {
+      var para = paragraphRequests_(api.nodes, theme.bg, api.tabId);
+      requests = requests.concat(para);
+      blocks = para.length;
+    }
+    if (requests.length) Docs.Documents.batchUpdate({ requests: requests }, api.id);
+  } else {
+    applyBase_(sel.segments, theme, opts);
+    applyRuns_(sel.segments, runs);
+    if (opts.fullWidth) blocks = styleParagraphs_(sel.paragraphs, theme.bg);
+  }
+  if (opts.fullWidth && !blocks) {
+    throw new Error('The text was highlighted, but no lines could be shaded as a block. Full-width blocks ' +
+      'only work on lines in the document body, not in headers, footers or footnotes.');
+  }
   return { lang: lang, langName: Highlighter.langName(lang), runs: runs.length, chars: sel.text.length, lines: blocks };
 }
 
@@ -83,6 +99,19 @@ function previewSelection(opts) {
 function clearSelection(opts) {
   opts = normalizeOpts_(opts || loadSettings_());
   var sel = readSelection_(opts.fullWidth);
+  var api = apiTargets_(sel);
+  if (api) {
+    var requests = [];
+    sel.segments.forEach(function (seg) {
+      if (!seg.len) return;
+      requests.push({ updateTextStyle: { range: apiRange_(seg.api, seg.api + seg.len, api.tabId), textStyle: {},
+        fields: 'foregroundColor,backgroundColor,bold,italic,weightedFontFamily,fontSize' } });
+    });
+    var para = paragraphRequests_(api.nodes, null, api.tabId);
+    requests = requests.concat(para);
+    if (requests.length) Docs.Documents.batchUpdate({ requests: requests }, api.id);
+    return { chars: sel.text.length, lines: para.length };
+  }
   var A = DocumentApp.Attribute;
   sel.segments.forEach(function (seg) {
     if (!seg.len) return;
@@ -139,7 +168,9 @@ function saveSettings_(opts) {
 
 /**
  * Reads the current selection as one string plus the document segments it came from.
- * Each segment: {text: Text, start: offset in that element, off: offset in the joined string, len}.
+ * Each segment: {text: Text, start: offset in that element, off: offset in the joined string, len,
+ * para: its Paragraph / ListItem, whole: true when the Text spans that whole paragraph, so `start` is
+ * also an offset into the paragraph, full: the element's whole text}.
  * With wholeLines, every paragraph the selection touches is read in full.
  * Also returns the touched paragraphs (Paragraph / ListItem elements), each listed once.
  */
@@ -163,7 +194,8 @@ function readSelection_(wholeLines) {
     if (re.isPartial() && !(wholeLines && para)) { s = re.getStartOffset(); e = re.getEndOffsetInclusive(); }
     var str = e >= s ? full.substring(s, e + 1) : '';
     if (parts.length) { parts.push('\n'); off += 1; }
-    segments.push({ text: t, start: s, off: off, len: str.length });
+    var whole = !!para && (el === para || para.getNumChildren() === 1);
+    segments.push({ text: t, start: s, off: off, len: str.length, para: para, whole: whole, full: full });
     parts.push(str);
     off += str.length;
   });
@@ -217,11 +249,21 @@ function styleParagraphs_(paragraphs, bg) {
   if (!paths.length) return 0;
   var docApp = DocumentApp.getActiveDocument();
   var id = docApp.getId();
-  var tabId = null;
-  try { tabId = docApp.getActiveTab().getId(); } catch (e) { /* older runtime without tabs */ }
+  var tabId = activeTabId_(docApp);
   docApp.saveAndClose(); // the Docs API only sees changes once DocumentApp has saved them
   var content = apiBodyContent_(id, tabId);
   if (!content) return 0;
+  var nodes = paths.map(function (path) { return apiParagraphAt_(content, path); });
+  var requests = paragraphRequests_(nodes, bg, tabId);
+  if (requests.length) Docs.Documents.batchUpdate({ requests: requests }, id);
+  return requests.length;
+}
+
+/**
+ * updateParagraphStyle requests for the block styling of styleParagraphs_(). Skips null nodes, and
+ * with bg = null only includes paragraphs that have shading.
+ */
+function paragraphRequests_(nodes, bg, tabId) {
   var style = {}, fields = BLOCK_FIELDS;
   if (bg) {
     var color = { color: { rgbColor: hexToRgb_(bg) } };
@@ -236,22 +278,89 @@ function styleParagraphs_(paragraphs, bg) {
     };
   }
   var requests = [];
-  paths.forEach(function (path) {
-    var node = apiParagraphAt_(content, path);
+  nodes.forEach(function (node) {
     if (!node) return;
     if (!bg) {
       var sh = node.paragraph.paragraphStyle && node.paragraph.paragraphStyle.shading;
       if (!(sh && sh.backgroundColor && sh.backgroundColor.color)) return;
     }
-    var range = { startIndex: node.startIndex || 0, endIndex: node.endIndex };
-    if (tabId) range.tabId = tabId;
     requests.push({ updateParagraphStyle: {
-      range: range,
-      paragraphStyle: style, fields: fields
+      range: apiRange_(node.startIndex || 0, node.endIndex, tabId), paragraphStyle: style, fields: fields
     } });
   });
-  if (requests.length) Docs.Documents.batchUpdate({ requests: requests }, id);
-  return requests.length;
+  return requests;
+}
+
+function activeTabId_(docApp) {
+  try { return docApp.getActiveTab().getId(); } catch (e) { return null; /* runtime without tabs */ }
+}
+
+function apiRange_(start, end, tabId) {
+  var r = { startIndex: start, endIndex: end };
+  if (tabId) r.tabId = tabId;
+  return r;
+}
+
+/** A paragraph's text as the Docs API sees it; non-text elements become \u0000 so they never match. */
+function apiParagraphText_(node) {
+  return (node.paragraph.elements || []).map(function (e) {
+    return e.textRun ? e.textRun.content : '\u0000';
+  }).join('').replace(/\n$/, '');
+}
+
+/**
+ * Locates the selection in the Docs API's view of the document, setting seg.api (the API index of
+ * seg.start) on each segment. Returns {id, tabId, nodes: API paragraph per sel.paragraphs entry}, or
+ * null when some part can't be mapped reliably (headers, inline images, chips, line breaks, ...), in
+ * which case the caller falls back to DocumentApp.
+ */
+function apiTargets_(sel) {
+  if (!sel.segments.every(function (seg) { return seg.whole; })) return null;
+  var paths = sel.paragraphs.map(bodyPath_);
+  if (paths.some(function (p) { return !p; })) return null;
+  var docApp = DocumentApp.getActiveDocument();
+  var id = docApp.getId(), tabId = activeTabId_(docApp);
+  var content = apiBodyContent_(id, tabId);
+  if (!content) return null;
+  var nodes = paths.map(function (path) { return apiParagraphAt_(content, path); });
+  if (nodes.some(function (n) { return !n; })) return null;
+  for (var k = 0; k < sel.segments.length; k++) {
+    var seg = sel.segments[k];
+    var node = nodes[sel.paragraphs.indexOf(seg.para)];
+    if (!node || apiParagraphText_(node) !== seg.full) return null;
+    seg.api = node.startIndex + seg.start;
+  }
+  return { id: id, tabId: tabId, nodes: nodes };
+}
+
+/** updateTextStyle requests for the base style of every segment and then each colored run. */
+function textRequests_(segments, runs, theme, opts, tabId) {
+  var requests = [];
+  var color = function (hex) { return { color: { rgbColor: hexToRgb_(hex) } }; };
+  var base = { foregroundColor: color(theme.fg), bold: false, italic: false };
+  var fields = ['foregroundColor', 'bold', 'italic', 'backgroundColor'];
+  if (opts.font && opts.font !== 'keep') { base.weightedFontFamily = { fontFamily: opts.font }; fields.push('weightedFontFamily'); }
+  if (opts.fontSize > 0) { base.fontSize = { magnitude: opts.fontSize, unit: 'PT' }; fields.push('fontSize'); }
+  // a full-width block colors the whole paragraph, so the text itself needs no highlight
+  if (opts.background && !opts.fullWidth) base.backgroundColor = color(theme.bg);
+  segments.forEach(function (seg) {
+    if (!seg.len) return;
+    requests.push({ updateTextStyle: { range: apiRange_(seg.api, seg.api + seg.len, tabId), textStyle: base,
+      fields: fields.join(',') } });
+  });
+  var j = 0;
+  runs.forEach(function (run) {
+    while (j < segments.length && segments[j].off + segments[j].len <= run.s) j++;
+    var style = { foregroundColor: color(run.style.c), bold: run.style.b, italic: run.style.i };
+    for (var k = j; k < segments.length && segments[k].off < run.e; k++) {
+      var seg = segments[k];
+      var a = Math.max(run.s, seg.off), b = Math.min(run.e, seg.off + seg.len);
+      if (b <= a) continue;
+      requests.push({ updateTextStyle: { range: apiRange_(seg.api + a - seg.off, seg.api + b - seg.off, tabId),
+        textStyle: style, fields: 'foregroundColor,bold,italic' } });
+    }
+  });
+  return requests;
 }
 
 /** Body content of the given tab (or of the document when tabId is null), from the Docs API. */

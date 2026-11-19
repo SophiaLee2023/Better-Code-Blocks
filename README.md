@@ -139,11 +139,11 @@ next time you run it.
 
 1. Select the code in the doc.
 2. In the sidebar, pick a language (or **Auto-detect**), a theme and a mode. Use **Light** for
-   white or light gray pages, and **Dark** together with **Theme background color on text** or
-   **Full-width code block**.
-3. Click **Highlight selection**.
+   white or light gray pages, and **Dark** together with **Text background** or
+   **Full-width block**.
+3. Click **Highlight**.
 
-With **Full-width code block** checked, every line the selection touches is highlighted in full,
+With **Full-width block** checked, every line the selection touches is highlighted in full,
 even if you only selected part of it. Each line gets paragraph shading in the theme background
 from the left margin to the right, plus a border of the same color as padding and no spacing
 between lines, so consecutive lines join into one block.

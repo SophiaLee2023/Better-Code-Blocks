@@ -29,7 +29,8 @@ function fakeText(str) {
     setFontFamily(s, e, f) { this.setAttributes(s, e, { FONT_FAMILY: f }); },
     setFontSize(s, e, f) { this.setAttributes(s, e, { FONT_SIZE: f }); },
   };
-  text.para = { getType: () => 'PARAGRAPH', getParent: () => body, getChildIndex: () => 0, editAsText: () => text };
+  text.para = { getType: () => 'PARAGRAPH', getParent: () => body, getChildIndex: () => 0, editAsText: () => text,
+    getNumChildren: () => 1 };
   text.getParent = () => text.para;
   return text;
 }
@@ -54,22 +55,30 @@ const rangeElements = [
 }));
 
 // fake Docs API: the selection is in tab t.1 (a child tab); its body starts with a section break,
-// then one paragraph per line
+// then one paragraph per line. Text style requests are written back onto the fake DocumentApp chars.
 const apiStyles = paras.map(() => ({}));
 const batches = [];
+let inlineImage = false; // when true, the first line also holds an image, so the API text differs
 function apiContent() {
   let i = 1;
   return [{ endIndex: 1, sectionBreak: {} }].concat(paras.map((p, k) => {
-    const node = { startIndex: i, endIndex: i + p.getText().length + 1, paragraph: { paragraphStyle: apiStyles[k] } };
+    const elements = [{ textRun: { content: p.getText() + '\n' } }];
+    if (inlineImage && k === 0) elements.unshift({ inlineObjectElement: {} });
+    const node = { startIndex: i, endIndex: i + p.getText().length + 1 + (inlineImage && k === 0 ? 1 : 0),
+      paragraph: { elements, paragraphStyle: apiStyles[k] } };
     i = node.endIndex;
     return node;
   }));
 }
+const hex = (c) => '#' + ['red', 'green', 'blue'].map((k) => Math.round(c.color.rgbColor[k] * 255).toString(16).padStart(2, '0')).join('');
+const TEXT_ATTRS = {
+  foregroundColor: ['FOREGROUND_COLOR', hex], backgroundColor: ['BACKGROUND_COLOR', hex], bold: ['BOLD', (v) => v],
+  italic: ['ITALIC', (v) => v], weightedFontFamily: ['FONT_FAMILY', (v) => v.fontFamily], fontSize: ['FONT_SIZE', (v) => v.magnitude],
+};
 const Docs = {
   Documents: {
     get(id, o) {
       assert.strictEqual(id, 'doc1');
-      assert(closed, 'Docs API read before saveAndClose()');
       assert(o && o.includeTabsContent, 'tab content not requested');
       return { tabs: [{ tabProperties: { tabId: 't.0' }, childTabs: [
         { tabProperties: { tabId: 't.1' }, documentTab: { body: { content: apiContent() } } }] }] };
@@ -77,12 +86,25 @@ const Docs = {
     batchUpdate(req, id) {
       assert.strictEqual(id, 'doc1');
       batches.push(req.requests);
-      const content = apiContent();
-      req.requests.forEach(({ updateParagraphStyle: u }) => {
+      const content = apiContent().slice(1);
+      req.requests.forEach((r) => {
+        const u = r.updateParagraphStyle || r.updateTextStyle;
         assert.strictEqual(u.range.tabId, 't.1');
-        const k = content.findIndex((n) => n.startIndex === u.range.startIndex && n.endIndex === u.range.endIndex) - 1;
-        assert(k >= 0, 'range is not a paragraph');
-        apiStyles[k] = u.paragraphStyle;
+        if (r.updateParagraphStyle) {
+          const k = content.findIndex((n) => n.startIndex === u.range.startIndex && n.endIndex === u.range.endIndex);
+          assert(k >= 0, 'range is not a paragraph');
+          apiStyles[k] = u.paragraphStyle;
+          return;
+        }
+        const k = content.findIndex((n) => n.startIndex <= u.range.startIndex && u.range.endIndex < n.endIndex);
+        assert(k >= 0, `text range ${u.range.startIndex}-${u.range.endIndex} crosses a paragraph end`);
+        const attrs = {};
+        u.fields.split(',').forEach((f) => {
+          const [name, conv] = TEXT_ATTRS[f];
+          attrs[name] = f in u.textStyle ? conv(u.textStyle[f]) : null;
+        });
+        const s = u.range.startIndex - content[k].startIndex;
+        paras[k].setAttributes(s, s + u.range.endIndex - u.range.startIndex - 1, attrs);
       });
     },
   },
@@ -137,8 +159,9 @@ assert.strictEqual(colorAt(paras[3], '"').FOREGROUND_COLOR, '#98c379');
 assert.strictEqual(colorAt(paras[3], '#').ITALIC, true);
 // last character of last paragraph got formatted
 assert.strictEqual(paras[3].chars[paras[3].chars.length - 1].a.ITALIC, true);
-// no block requested, nothing shaded
-assert.strictEqual(batches.length, 0);
+// all of it went out as one Docs API request, with no block shading
+assert.strictEqual(batches.length, 1);
+assert(batches[0].every((r) => r.updateTextStyle));
 
 run('clearSelection');
 assert.strictEqual(colorAt(paras[1], 'docker').FOREGROUND_COLOR, null);
@@ -153,12 +176,13 @@ assert.strictEqual(JSON.parse(props['codeHighlighter.settings']).mode, 'light');
 run('clearSelection');
 
 // full-width block: whole lines are highlighted, every touched paragraph is shaded
+const before = batches.length;
 const block = run('highlightSelection', { lang: 'bash', theme: 'one', mode: 'dark', font: 'keep', fontSize: 0, background: true, fontStyles: true, fullWidth: true });
 assert.strictEqual(block.lines, 4);
 assert.ok(paras[0].chars[0].a.FOREGROUND_COLOR, 'text before the partial selection is highlighted too');
 assert.strictEqual(colorAt(paras[0], 'ros2').BACKGROUND_COLOR, null, 'no text highlight on top of the block');
-assert.strictEqual(batches.length, 1);
-const reqs = batches[0].map((r) => r.updateParagraphStyle);
+assert.strictEqual(batches.length, before + 1, 'text and block styling in a single request');
+const reqs = batches[batches.length - 1].filter((r) => r.updateParagraphStyle).map((r) => r.updateParagraphStyle);
 assert.strictEqual(JSON.stringify(reqs.map((u) => [u.range.startIndex, u.range.endIndex])), JSON.stringify([[1, 29], [29, 50], [50, 51], [51, 72]]));
 const shade = reqs[0].paragraphStyle.shading.backgroundColor.color.rgbColor;
 assert.strictEqual(JSON.stringify(shade), JSON.stringify({ red: 0x28 / 255, green: 0x2c / 255, blue: 0x34 / 255 }));
@@ -170,6 +194,20 @@ const cleared = run('clearSelection', { fullWidth: true });
 assert.strictEqual(cleared.lines, 4);
 assert(apiStyles.every((st) => !st.shading), 'shading removed');
 assert.strictEqual(paras[0].chars[0].a.FOREGROUND_COLOR, null);
+
+// when the Docs API's text doesn't match (here: an inline image), fall back to DocumentApp
+inlineImage = true;
+const n = batches.length;
+const fallback = run('highlightSelection', { lang: 'bash', theme: 'one', mode: 'dark', font: 'keep', fontSize: 0, background: true, fontStyles: true, fullWidth: true });
+assert.strictEqual(fallback.lines, 4);
+assert.strictEqual(colorAt(paras[1], 'docker').FOREGROUND_COLOR, '#2496ed');
+assert.strictEqual(batches.length, n + 1);
+assert(batches[n].every((r) => r.updateParagraphStyle), 'only the block shading goes through the Docs API');
+assert(apiStyles.every((st) => st.shading), 'shaded');
+run('clearSelection', { fullWidth: true });
+assert(apiStyles.every((st) => !st.shading), 'shading removed');
+assert.strictEqual(colorAt(paras[1], 'docker').FOREGROUND_COLOR, null);
+inlineImage = false;
 
 // settings saved with an old single-palette theme id still load
 props['codeHighlighter.settings'] = JSON.stringify({ theme: 'githublight' });

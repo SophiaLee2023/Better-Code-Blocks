@@ -20,7 +20,6 @@
     pre#preview { display: none; margin-top: 10px; padding: 10px; border-radius: 6px; overflow: auto;
       max-height: 320px; font: 12px/1.45 'Roboto Mono', Consolas, monospace; white-space: pre; }
     .warn { display: none; margin-top: 6px; color: #b06000; font-size: 12px; line-height: 1.4; }
-    .hint { color: #5f6368; font-size: 12px; margin-top: 14px; line-height: 1.45; }
   </style>
 </head>
 <body>
@@ -41,7 +40,7 @@
     </div>
   </div>
   <div class="swatch" id="swatch"></div>
-  <div class="warn" id="modeWarn">Dark mode colors are made for a dark background. Turn on the theme background, or switch to Light mode for a white or gray page.</div>
+  <div class="warn" id="modeWarn">Dark mode needs a background. Turn one on, or use Light.</div>
 
   <div class="row">
     <div>
@@ -54,24 +53,17 @@
     </div>
   </div>
 
-  <div class="check"><input type="checkbox" id="fullWidth"><label for="fullWidth">Full-width code block (whole lines, margin to margin)</label></div>
-  <div class="check"><input type="checkbox" id="background"><label for="background">Theme background color on text</label></div>
-  <div class="check"><input type="checkbox" id="fontStyles"><label for="fontStyles">Bold / italic from theme</label></div>
+  <div class="check"><input type="checkbox" id="fullWidth"><label for="fullWidth" title="Shade whole lines from margin to margin">Full-width block</label></div>
+  <div class="check"><input type="checkbox" id="background"><label for="background" title="Theme background behind the text only">Text background</label></div>
+  <div class="check"><input type="checkbox" id="fontStyles"><label for="fontStyles" title="Bold / italic from the theme">Bold / italic</label></div>
 
   <div class="buttons">
-    <button class="action" id="btnApply">Highlight selection</button>
+    <button class="action" id="btnApply">Highlight</button>
     <button id="btnPreview">Preview</button>
     <button id="btnClear">Clear</button>
   </div>
   <div id="status"></div>
   <pre id="preview"></pre>
-
-  <div class="hint">
-    Select code in the document, pick a language (or Auto-detect) and a theme, then click <b>Highlight selection</b>.
-    Only text formatting is changed — font, color, bold/italic and text background.<br><br>
-    <b>ROS 2</b> (ros2, colcon, rosdep, launch XML, ament CMake, rclpy/rclcpp) and <b>Docker</b>
-    (docker, docker compose, Dockerfiles, compose YAML) get their own colors.
-  </div>
 
 <script>
   var cfg = null;
@@ -136,8 +128,7 @@
 
   $('btnApply').addEventListener('click', function () {
     call('highlightSelection', function (r) {
-      status('Highlighted ' + r.chars + ' characters as ' + r.langName +
-        (r.lines ? ' in a ' + r.lines + '-line block.' : '.'));
+      status('Done · ' + shortName(r.langName));
     }, 'Highlighting…');
   });
 
@@ -146,13 +137,16 @@
       var p = $('preview');
       p.style.display = 'block'; p.style.background = r.bg; p.style.color = r.fg;
       p.innerHTML = r.html;
-      status('Preview: ' + r.langName + (r.truncated ? ' (first 5000 characters)' : ''));
-    }, 'Rendering preview…');
+      status(shortName(r.langName) + (r.truncated ? ' · first 5000 characters' : ''));
+    }, 'Rendering…');
   });
 
   $('btnClear').addEventListener('click', function () {
-    call('clearSelection', function () { status('Formatting cleared.'); }, 'Clearing…');
+    call('clearSelection', function () { status('Cleared'); }, 'Clearing…');
   });
+
+  /** "Bash / Shell (ROS 2 + Docker aware)" -> "Bash / Shell" */
+  function shortName(name) { return name.replace(/\s*\(.*\)$/, ''); }
 
   google.script.run
     .withSuccessHandler(init)
