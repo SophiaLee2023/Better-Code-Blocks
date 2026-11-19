@@ -1,0 +1,22 @@
+services:
+  robot:
+    image: my-ros:humble   # local build
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=42
+    volumes:
+      - ./src:/ws/src
+    command: ros2 launch my_pkg bringup.launch.py use_sim:=true
+    restart: unless-stopped
+  talker:
+    image: ros:humble
+    command: >
+      bash -c "source /opt/ros/humble/setup.bash && ros2 run demo_nodes_cpp talker"
+    depends_on: [robot]
+x-defaults: &defaults
+  tty: true
+  replicas: 3
+  enabled: false

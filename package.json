@@ -1,0 +1,12 @@
+{
+  "name": "code-highlighter-gdocs",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Google Docs add-on that syntax-highlights selected text in place.",
+  "scripts": {
+    "test": "node test/run_samples.js && node test/apply_selection.js",
+    "preview_all": "node test/run_samples.js --all",
+    "push": "clasp push"
+  }
+}

@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- simulator -->
+  <arg name="use_sim" default="true"/>
+  <include file="$(find-pkg-share my_pkg)/launch/sim.launch.py"/>
+  <node pkg="turtlesim" exec="turtlesim_node" name="sim" output="screen">
+    <param name="background_r" value="120"/>
+    <remap from="/turtle1/cmd_vel" to="/cmd_vel"/>
+  </node>
+</launch>

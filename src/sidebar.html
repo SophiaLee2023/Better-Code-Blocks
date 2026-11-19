@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <link rel="stylesheet" href="https://ssl.gstatic.com/docs/script/css/add-ons1.css">
+  <style>
+    body { padding: 12px; font-size: 13px; }
+    label.block { display: block; font-weight: 500; margin: 10px 0 4px; }
+    select, input[type=number] { width: 100%; box-sizing: border-box; }
+    .row { display: flex; gap: 8px; }
+    .row > div { flex: 1; }
+    .check { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+    .swatch { display: flex; height: 22px; border-radius: 4px; overflow: hidden; margin-top: 6px; border: 1px solid #dadce0; }
+    .swatch span { flex: 1; }
+    .swatch .bg { flex: 2; display: flex; align-items: center; padding-left: 6px; font: 11px 'Roboto Mono', monospace; }
+    .buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+    .buttons button { margin: 0; }
+    #status { margin-top: 10px; min-height: 18px; color: #5f6368; }
+    #status.error { color: #d93025; }
+    pre#preview { display: none; margin-top: 10px; padding: 10px; border-radius: 6px; overflow: auto;
+      max-height: 320px; font: 12px/1.45 'Roboto Mono', Consolas, monospace; white-space: pre; }
+    .hint { color: #5f6368; font-size: 12px; margin-top: 14px; line-height: 1.45; }
+  </style>
+</head>
+<body>
+  <label class="block" for="lang">Language</label>
+  <select id="lang"></select>
+
+  <label class="block" for="theme">Theme</label>
+  <select id="theme"></select>
+  <div class="swatch" id="swatch"></div>
+
+  <div class="row">
+    <div>
+      <label class="block" for="font">Font</label>
+      <select id="font"></select>
+    </div>
+    <div style="flex:0 0 70px">
+      <label class="block" for="fontSize">Size</label>
+      <input type="number" id="fontSize" min="0" max="72" step="1" title="0 keeps the current size">
+    </div>
+  </div>
+
+  <div class="check"><input type="checkbox" id="background"><label for="background">Theme background color on text</label></div>
+  <div class="check"><input type="checkbox" id="fontStyles"><label for="fontStyles">Bold / italic from theme</label></div>
+
+  <div class="buttons">
+    <button class="action" id="btnApply">Highlight selection</button>
+    <button id="btnPreview">Preview</button>
+    <button id="btnClear">Clear</button>
+  </div>
+  <div id="status"></div>
+  <pre id="preview"></pre>
+
+  <div class="hint">
+    Select code in the document, pick a language (or Auto-detect) and a theme, then click <b>Highlight selection</b>.
+    Only text formatting is changed — font, color, bold/italic and text background.<br><br>
+    <b>ROS 2</b> (ros2, colcon, rosdep, launch XML, ament CMake, rclpy/rclcpp) and <b>Docker</b>
+    (docker, docker compose, Dockerfiles, compose YAML) get their own colors.
+  </div>
+
+<script>
+  var cfg = null;
+  var $ = function (id) { return document.getElementById(id); };
+
+  function option(value, text) { var o = document.createElement('option'); o.value = value; o.textContent = text; return o; }
+
+  function init(c) {
+    cfg = c;
+    $('lang').appendChild(option('auto', 'Auto-detect'));
+    c.languages.forEach(function (l) { $('lang').appendChild(option(l.id, l.name)); });
+
+    [['Dark', true], ['Light', false]].forEach(function (g) {
+      var group = document.createElement('optgroup'); group.label = g[0];
+      c.themes.filter(function (t) { return t.dark === g[1]; }).forEach(function (t) { group.appendChild(option(t.id, t.name)); });
+      $('theme').appendChild(group);
+    });
+
+    $('font').appendChild(option('keep', '(keep current)'));
+    c.fonts.forEach(function (f) { $('font').appendChild(option(f, f)); });
+
+    var s = c.settings;
+    $('lang').value = s.lang; $('theme').value = s.theme; $('font').value = s.font;
+    $('fontSize').value = s.fontSize; $('background').checked = s.background; $('fontStyles').checked = s.fontStyles;
+    renderSwatch();
+  }
+
+  function renderSwatch() {
+    var t = cfg.themes.filter(function (x) { return x.id === $('theme').value; })[0];
+    if (!t) return;
+    var html = '<span class="bg" style="background:' + t.bg + ';color:' + t.fg + '">Aa</span>';
+    t.swatch.forEach(function (col) { html += '<span style="background:' + col + '"></span>'; });
+    $('swatch').innerHTML = html;
+    $('swatch').title = 'keyword · string · function · type · ROS 2 · Docker';
+  }
+
+  function opts() {
+    return {
+      lang: $('lang').value, theme: $('theme').value, font: $('font').value,
+      fontSize: Number($('fontSize').value) || 0,
+      background: $('background').checked, fontStyles: $('fontStyles').checked
+    };
+  }
+
+  function status(msg, isError) { $('status').textContent = msg; $('status').className = isError ? 'error' : ''; }
+
+  function busy(on) { ['btnApply', 'btnPreview', 'btnClear'].forEach(function (id) { $(id).disabled = on; }); }
+
+  function call(fn, onOk, label) {
+    busy(true); status(label);
+    google.script.run
+      .withSuccessHandler(function (r) { busy(false); onOk(r); })
+      .withFailureHandler(function (e) { busy(false); status(e.message || String(e), true); })[fn](opts());
+  }
+
+  $('theme').addEventListener('change', renderSwatch);
+
+  $('btnApply').addEventListener('click', function () {
+    call('highlightSelection', function (r) {
+      status('Highlighted ' + r.chars + ' characters as ' + r.langName + '.');
+    }, 'Highlighting…');
+  });
+
+  $('btnPreview').addEventListener('click', function () {
+    call('previewSelection', function (r) {
+      var p = $('preview');
+      p.style.display = 'block'; p.style.background = r.bg; p.style.color = r.fg;
+      p.innerHTML = r.html;
+      status('Preview: ' + r.langName + (r.truncated ? ' (first 5000 characters)' : ''));
+    }, 'Rendering preview…');
+  });
+
+  $('btnClear').addEventListener('click', function () {
+    call('clearSelection', function () { status('Formatting cleared.'); }, 'Clearing…');
+  });
+
+  google.script.run
+    .withSuccessHandler(init)
+    .withFailureHandler(function (e) { status(e.message || String(e), true); })
+    .getConfig();
+</script>
+</body>
+</html>

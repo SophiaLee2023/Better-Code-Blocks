@@ -1,0 +1,10 @@
+:root { --accent: #61afef; }
+
+@media (max-width: 600px) {
+  .nav a:hover,
+  #logo::after {
+    color: var(--accent);
+    padding: 0.5rem 1em;
+    background: url(images/bg.png) no-repeat;
+  }
+}
